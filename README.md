@@ -8,5 +8,6 @@ This project investigates whether changes in societal gender biases, particularl
 | Folder              | Description |
 |---------------------------|-------------|
 | `Code/`                   | Contains scripts for preprocessing, creating word embeddings and data analysis |
-| `Data/`                  | Data not publicly available |
 | `Plots/`                  | Plots exploring data and results |
+
+Data and models are not publicly available
