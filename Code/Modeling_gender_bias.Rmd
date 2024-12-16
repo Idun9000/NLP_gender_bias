@@ -1,0 +1,660 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+# Set working directory and install and import packages
+```{r}
+setwd("/Users/tildeidunsloth/Desktop/NLP/NLP_exam")
+pacman::p_load(tidyverse,brms, posterior, tidybayes)
+```
+
+# Fixing up some stan stuff
+```{r}
+cmdstanr::cmdstan_path()
+cmdstanr::cmdstan_version()
+```
+
+
+# Avoid scientific notation
+```{r}
+options(scipen = 999)
+```
+
+
+# Import the data
+```{r}
+# Loading in the data
+data <- read_csv("word_similarity__extra_categories_results.csv")
+
+# Changing the year variable to make summary output easier to interpret
+data <- data %>% 
+  mutate(year_centered = year - 1900)
+```
+# Subsets for different categories
+```{r}
+# Making subsets of data based on category
+positive_agency <- data %>% 
+  filter(category == "positive_agency")
+negative_agency <- data %>% 
+  filter(category == "negative_agency")
+high_competence <- data %>% 
+  filter(category == "high_competence")
+low_competence <- data %>% 
+  filter(category == "low_competence")
+high_warmth <- data %>% 
+  filter(category == "high_warmth")
+low_warmth <- data %>% 
+  filter(category == "low_warmth")
+occupation_trad_female <- data %>% 
+  filter(category == "occupation_trad_female")
+occupation_trad_male <- data %>% 
+  filter(category == "occupation_trad_male")
+appearance_related <- data %>% 
+  filter(category == "appearance_related")
+```
+
+# Investigating the distribution of values for the variable we want to predict
+```{r}
+# Looking at the distribution
+hist(data$gender_bias, breaks = 30)
+```
+
+
+# Plotting gender bias over time for specific words
+```{r}
+ggplot(data[data$word == "friendly", ], aes(x = year_centered, y = gender_bias)) +
+  geom_line(stat = "summary", fun = "mean", color = "blue") +
+  geom_point(stat = "summary", fun = "mean", color = "red") +
+  geom_smooth(method = "lm", color = "green", se = TRUE) +
+  labs(title = "Gender Bias Over Time for word friendly",
+       x = "Year",
+       y = "Gender Bias") +
+  theme_minimal()
+
+ggplot(data[data$word == "independent", ], aes(x = year_centered, y = gender_bias)) +
+  geom_line(stat = "summary", fun = "mean", color = "blue") +
+  geom_point(stat = "summary", fun = "mean", color = "red") +
+  geom_smooth(method = "lm", color = "green", se = TRUE) +
+  labs(title = "Gender Bias Over Time for word independent",
+       x = "Year",
+       y = "Gender Bias") +
+  theme_minimal()
+
+ggplot(data[data$word == "enforce", ], aes(x = year_centered, y = gender_bias)) +
+  geom_line(stat = "summary", fun = "mean", color = "blue") +
+  geom_point(stat = "summary", fun = "mean", color = "red") +
+  geom_smooth(method = "lm", color = "green", se = TRUE) +
+  labs(title = "Gender Bias Over Time for word enforce",
+       x = "Year",
+       y = "Gender Bias") +
+  theme_minimal()
+
+ggplot(data[data$word == "nurse", ], aes(x = year_centered, y = gender_bias)) +
+  geom_line(stat = "summary", fun = "mean", color = "blue") +
+  geom_point(stat = "summary", fun = "mean", color = "red") +
+  geom_smooth(method = "lm", color = "green", se = TRUE) +
+  labs(title = "Gender Bias Over Time for word nurse",
+       x = "Year",
+       y = "Gender Bias") +
+  theme_minimal()
+
+ggplot(data[data$word == "command", ], aes(x = year_centered, y = gender_bias)) +
+  geom_line(stat = "summary", fun = "mean", color = "blue") +
+  geom_point(stat = "summary", fun = "mean", color = "red") +
+  geom_smooth(method = "lm", color = "green", se = TRUE) +
+  labs(title = "Gender Bias Over Time for word command",
+       x = "Year",
+       y = "Gender Bias") +
+  theme_minimal()
+```
+
+
+
+# Setting a broad prior for the bayesian models
+```{r}
+# Setting the prior
+prior <- c(
+  prior(normal(0, 0.1), class = "b"),        # Slope: small changes over time
+  prior(normal(0, 1), class = "Intercept"),  # Intercept: centered around observed values
+  prior(exponential(1), class = "sigma")     # Residual SD: positive and moderate spread
+)
+
+```
+
+# Looking at the values and variance for the variables of interest
+```{r}
+summary(data$gender_bias)
+var(data$gender_bias)
+```
+
+# Positive agency model
+```{r}
+cores <- parallel::detectCores()
+chains = 2
+
+# Trying to run a model
+model_pos_agency <- brm(
+  formula = gender_bias ~ year_centered,
+  data = positive_agency,
+  backend = "cmdstanr",
+  prior = prior,
+  family = gaussian(),
+  chains = chains,
+  iter = 3000,
+  warmup = 1000,
+  cores = cores
+)
+
+```
+
+```{r}
+print(summary(model_pos_agency), digits = 5)
+plot(model_pos_agency)
+
+# View the summary of the model
+posterior_summary(model_pos_agency)
+
+pp_check(model_pos_agency)
+```
+
+
+```{r}
+# Step 1: Extract posterior draws for the regression line
+posterior_lines <- model_pos_agency %>%
+  spread_draws(b_Intercept, b_year_centered) %>%            # Extract posterior samples
+  mutate(year = list(seq(min(positive_agency$year_centered), 
+                         max(positive_agency$year_centered), length.out = 100))) %>%
+  unnest(year) %>%
+  mutate(.fitted = b_Intercept + b_year_centered * year)    # Compute fitted values for each 'year'
+
+# Step 2: Save the plot as a ggplot object
+plot_positive_agency <- ggplot(positive_agency, aes(x = year_centered, y = gender_bias)) +
+  geom_point(aes(color = word), alpha = 0.7, size = 2) +
+  stat_lineribbon(
+    data = posterior_lines,
+    aes(x = year, y = .fitted),
+    .width = c(0.5, 0.8, 0.95),
+    fill = "lightblue", alpha = 0.5
+  ) +
+  ylim(-0.2, 0.2) +
+  labs(title = "Positive Agency",
+       x = "Year",
+       y = "Gender Bias",
+       color = "Word") +
+  theme_minimal()
+
+```
+
+
+
+# Negative agency model
+```{r}
+model_negative_agency <- brm(
+  formula = gender_bias ~ year_centered,
+  data = negative_agency,
+  backend = "cmdstanr",
+  prior = prior,
+  family = gaussian(),
+  chains = chains,
+  iter = 3000,
+  warmup = 1000,
+  cores = cores
+)
+```
+
+
+
+```{r}
+print(summary(model_negative_agency), digits = 5)
+plot(model_negative_agency)
+
+pp_check(model_negative_agency)
+```
+
+```{r}
+# Step 1: Extract posterior draws for the regression line
+posterior_lines <- model_negative_agency %>%
+  spread_draws(b_Intercept, b_year_centered) %>%            # Extract posterior samples
+  mutate(year = list(seq(min(negative_agency$year_centered), 
+                         max(negative_agency$year_centered), length.out = 100))) %>%
+  unnest(year) %>%
+  mutate(.fitted = b_Intercept + b_year_centered * year)    # Compute fitted values for each 'year'
+
+# Step 2: Plot the observed data and posterior regression
+plot_negative_agency <- ggplot(negative_agency, aes(x = year_centered, y = gender_bias)) +
+  geom_point(aes(color = word), alpha = 0.7, size = 2) + # Observed data (one word/year)
+  stat_lineribbon(
+    data = posterior_lines,
+    aes(x = year, y = .fitted),                    # Posterior fitted line
+    .width = c(0.5, 0.8, 0.95),                    # Add credible intervals
+    fill = "lightblue", alpha = 0.5
+  ) +
+  ylim(-0.2, 0.2) +
+  labs(title = "Negative Agency",
+       x = "Year",
+       y = "Gender Bias",
+       color = "Word") +
+  theme_minimal()
+
+```
+
+# High Warmth model
+```{r}
+# Trying to run a model
+model_high_warmth <- brm(
+  formula = gender_bias ~ year_centered,
+  data = high_warmth,
+  backend = "cmdstanr",
+  prior = prior,
+  family = gaussian(),
+  chains = chains,
+  iter = 3000,
+  warmup = 1000,
+  cores = cores
+)
+```
+```{r}
+print(summary(model_high_warmth), digits = 5)
+plot(model_high_warmth)
+pp_check(model_high_warmth)
+```
+
+```{r}
+# Step 1: Extract posterior draws for the regression line
+posterior_lines <- model_high_warmth %>%
+  spread_draws(b_Intercept, b_year_centered) %>%            # Extract posterior samples
+  mutate(year = list(seq(min(high_warmth$year_centered), 
+                         max(high_warmth$year_centered), length.out = 100))) %>%
+  unnest(year) %>%
+  mutate(.fitted = b_Intercept + b_year_centered * year)    # Compute fitted values for each 'year'
+
+# Step 2: Plot the observed data and posterior regression
+plot_high_warmth <- ggplot(high_warmth, aes(x = year_centered, y = gender_bias)) +
+  geom_point(aes(color = word), alpha = 0.7, size = 2) + # Observed data (one word/year)
+  stat_lineribbon(
+    data = posterior_lines,
+    aes(x = year, y = .fitted),                    # Posterior fitted line
+    .width = c(0.5, 0.8, 0.95),                    # Add credible intervals
+    fill = "lightblue", alpha = 0.5
+  ) +
+  ylim(-0.2, 0.2) +
+  labs(title = "High Warmth",
+       x = "Year",
+       y = "Gender Bias",
+       color = "Word") +
+  theme_minimal()
+```
+
+
+# Low warmth model
+```{r}
+# Trying to run a model
+model_low_warmth <- brm(
+  formula = gender_bias ~ year_centered,
+  data = low_warmth,
+  backend = "cmdstanr",
+  prior = prior,
+  family = gaussian(),
+  chains = chains,
+  iter = 3000,
+  warmup = 1000,
+  cores = cores
+)
+```
+
+```{r}
+print(summary(model_low_warmth), digits = 5)
+plot(model_low_warmth)
+pp_check(model_low_warmth)
+```
+
+```{r}
+# Step 1: Extract posterior draws for the regression line
+posterior_lines <- model_low_warmth %>%
+  spread_draws(b_Intercept, b_year_centered) %>%            # Extract posterior samples
+  mutate(year = list(seq(min(low_warmth$year_centered), 
+                         max(low_warmth$year_centered), length.out = 100))) %>%
+  unnest(year) %>%
+  mutate(.fitted = b_Intercept + b_year_centered * year)    # Compute fitted values for each 'year'
+
+# Step 2: Plot the observed data and posterior regression
+plot_low_warmth <-ggplot(low_warmth, aes(x = year_centered, y = gender_bias)) +
+  geom_point(aes(color = word), alpha = 0.7, size = 2) + # Observed data (one word/year)
+  stat_lineribbon(
+    data = posterior_lines,
+    aes(x = year, y = .fitted),                    # Posterior fitted line
+    .width = c(0.5, 0.8, 0.95),                    # Add credible intervals
+    fill = "lightblue", alpha = 0.5
+  ) +
+  ylim(-0.2, 0.2) +
+  labs(title = "Low Warmth",
+       x = "Year",
+       y = "Gender Bias",
+       color = "Word") +
+  theme_minimal()
+```
+
+
+# Low competence model
+```{r}
+model_low_competence <- brm(
+  formula = gender_bias ~ year_centered,
+  data = low_competence,
+  backend = "cmdstanr",
+  prior = prior,
+  family = gaussian(),
+  chains = chains,
+  iter = 3000,
+  warmup = 1000,
+  cores = cores
+)
+```
+
+```{r}
+print(summary(model_low_competence), digits = 5)
+plot(model_low_competence)
+pp_check(model_low_competence)
+```
+```{r}
+# Step 1: Extract posterior draws for the regression line
+posterior_lines <- model_low_competence %>%
+  spread_draws(b_Intercept, b_year_centered) %>%            # Extract posterior samples
+  mutate(year = list(seq(min(low_competence$year_centered), 
+                         max(low_competence$year_centered), length.out = 100))) %>%
+  unnest(year) %>%
+  mutate(.fitted = b_Intercept + b_year_centered * year)    # Compute fitted values for each 'year'
+
+# Step 2: Plot the observed data and posterior regression
+plot_low_competence <-ggplot(low_competence, aes(x = year_centered, y = gender_bias)) +
+  geom_point(aes(color = word), alpha = 0.7, size = 2) + # Observed data (one word/year)
+  stat_lineribbon(
+    data = posterior_lines,
+    aes(x = year, y = .fitted),                    # Posterior fitted line
+    .width = c(0.5, 0.8, 0.95),                    # Add credible intervals
+    fill = "lightblue", alpha = 0.5
+  ) +
+  ylim(-0.2, 0.2) +
+  labs(title = "Low Competence",
+       x = "Year",
+       y = "Gender Bias",
+       color = "Word") +
+  theme_minimal()
+```
+
+
+
+# High competence model
+```{r}
+model_high_competence <- brm(
+  formula = gender_bias ~ year_centered,
+  data = high_competence,
+  backend = "cmdstanr",
+  prior = prior,
+  family = gaussian(),
+  chains = chains,
+  iter = 3000,
+  warmup = 1000,
+  cores = cores
+)
+```
+
+
+```{r}
+print(summary(model_high_competence), digits = 5)
+plot(model_high_competence)
+pp_check(model_high_competence)
+```
+
+```{r}
+# Step 1: Extract posterior draws for the regression line
+posterior_lines <- model_high_competence %>%
+  spread_draws(b_Intercept, b_year_centered) %>%            # Extract posterior samples
+  mutate(year = list(seq(min(high_competence$year_centered), 
+                         max(high_competence$year_centered), length.out = 100))) %>%
+  unnest(year) %>%
+  mutate(.fitted = b_Intercept + b_year_centered * year)    # Compute fitted values for each 'year'
+
+# Step 2: Plot the observed data and posterior regression
+plot_high_competence <- ggplot(high_competence, aes(x = year_centered, y = gender_bias)) +
+  geom_point(aes(color = word), alpha = 0.7, size = 2) + # Observed data (one word/year)
+  stat_lineribbon(
+    data = posterior_lines,
+    aes(x = year, y = .fitted),                    # Posterior fitted line
+    .width = c(0.5, 0.8, 0.95),                    # Add credible intervals
+    fill = "lightblue", alpha = 0.5
+  ) +
+  ylim(-0.2, 0.2) +
+  labs(title = "High Competence",
+       x = "Year",
+       y = "Gender Bias",
+       color = "Word") +
+  theme_minimal()
+```
+
+
+# Traditional female occupation model
+```{r}
+model_trad_female <- brm(
+  formula = gender_bias ~ year_centered,
+  data = occupation_trad_female,
+  backend = "cmdstanr",
+  prior = prior,
+  family = gaussian(),
+  chains = chains,
+  iter = 3000,
+  warmup = 1000,
+  cores = cores
+)
+```
+
+```{r}
+print(summary(model_trad_female), digits = 5)
+plot(model_trad_female)
+pp_check(model_trad_female)
+```
+
+```{r}
+# Step 1: Extract posterior draws for the regression line
+posterior_lines <- model_trad_female %>%
+  spread_draws(b_Intercept, b_year_centered) %>%            # Extract posterior samples
+  mutate(year = list(seq(min(occupation_trad_female$year_centered), 
+                         max(occupation_trad_female$year_centered), length.out = 100))) %>%
+  unnest(year) %>%
+  mutate(.fitted = b_Intercept + b_year_centered * year)    # Compute fitted values for each 'year'
+
+# Step 2: Plot the observed data and posterior regression
+plot_trad_female <- ggplot(occupation_trad_female, aes(x = year_centered, y = gender_bias)) +
+  geom_point(aes(color = word), alpha = 0.7, size = 2) + # Observed data (one word/year)
+  stat_lineribbon(
+    data = posterior_lines,
+    aes(x = year, y = .fitted),                    # Posterior fitted line
+    .width = c(0.5, 0.8, 0.95),                    # Add credible intervals
+    fill = "lightblue", alpha = 0.5
+  ) +
+  ylim(-0.2, 0.2) +
+  labs(title = "Traditional female jobs",
+       x = "Year",
+       y = "Gender Bias",
+       color = "Word") +
+  theme_minimal()
+```
+
+
+# Traditional male occupation model
+```{r}
+model_trad_male <- brm(
+  formula = gender_bias ~ year_centered,
+  data = occupation_trad_male,
+  backend = "cmdstanr",
+  prior = prior,
+  family = gaussian(),
+  chains = chains,
+  iter = 3000,
+  warmup = 1000,
+  cores = cores
+)
+```
+
+```{r}
+print(summary(model_trad_male), digits = 5)
+plot(model_trad_male)
+pp_check(model_trad_male)
+```
+```{r}
+# Step 1: Extract posterior draws for the regression line
+posterior_lines <- model_trad_male %>%
+  spread_draws(b_Intercept, b_year_centered) %>%            # Extract posterior samples
+  mutate(year = list(seq(min(occupation_trad_male$year_centered), 
+                         max(occupation_trad_male$year_centered), length.out = 100))) %>%
+  unnest(year) %>%
+  mutate(.fitted = b_Intercept + b_year_centered * year)    # Compute fitted values for each 'year'
+
+# Step 2: Plot the observed data and posterior regression
+plot_trad_male <- ggplot(occupation_trad_male, aes(x = year_centered, y = gender_bias)) +
+  geom_point(aes(color = word), alpha = 0.7, size = 2) + # Observed data (one word/year)
+  stat_lineribbon(
+    data = posterior_lines,
+    aes(x = year, y = .fitted),                    # Posterior fitted line
+    .width = c(0.5, 0.8, 0.95),                    # Add credible intervals
+    fill = "lightblue", alpha = 0.5
+  ) +
+  ylim(-0.2, 0.2) +
+  labs(title = "Tradtional male jobs",
+       x = "Year",
+       y = "Gender Bias",
+       color = "Word") +
+  theme_minimal()
+```
+
+
+
+# Appearance related words
+```{r}
+model_appearance_related <- brm(
+  formula = gender_bias ~ year_centered,
+  data = appearance_related,
+  backend = "cmdstanr",
+  prior = prior,
+  family = gaussian(),
+  chains = chains,
+  iter = 3000,
+  warmup = 1000,
+  cores = cores
+)
+```
+
+```{r}
+print(summary(model_appearance_related), digits = 5)
+plot(model_appearance_related)
+pp_check(model_appearance_related)
+```
+```{r}
+# Step 1: Extract posterior draws for the regression line
+posterior_lines <- model_appearance_related %>%
+  spread_draws(b_Intercept, b_year_centered) %>%            # Extract posterior samples
+  mutate(year = list(seq(min(appearance_related$year_centered), 
+                         max(appearance_related$year_centered), length.out = 100))) %>%
+  unnest(year) %>%
+  mutate(.fitted = b_Intercept + b_year_centered * year)    # Compute fitted values for each 'year'
+
+# Step 2: Plot the observed data and posterior regression
+plot_appearance_related <- ggplot(appearance_related, aes(x = year_centered, y = gender_bias)) +
+  geom_point(aes(color = word), alpha = 0.7, size = 2) + # Observed data (one word/year)
+  stat_lineribbon(
+    data = posterior_lines,
+    aes(x = year, y = .fitted),                    # Posterior fitted line
+    .width = c(0.5, 0.8, 0.95),                    # Add credible intervals
+    fill = "lightblue", alpha = 0.5
+  ) +
+  ylim(-0.2, 0.2) +
+  labs(title = "Appearance related words",
+       x = "Year",
+       y = "Gender Bias",
+       color = "Word") +
+  theme_minimal()
+```
+
+
+# Combined mega plot
+```{r}
+# Remove the legend (sidebar) from each plot
+plot_positive_agency <- plot_positive_agency + theme(legend.position = "none")
+plot_negative_agency <- plot_negative_agency + theme(legend.position = "none")
+plot_high_competence <- plot_high_competence + theme(legend.position = "none")
+plot_low_competence <- plot_low_competence + theme(legend.position = "none")
+plot_low_warmth <- plot_low_warmth + theme(legend.position = "none")
+plot_high_warmth <- plot_high_warmth + theme(legend.position = "none")
+plot_trad_female <- plot_trad_female + theme(legend.position = "none")
+plot_trad_male <- plot_trad_male + theme(legend.position = "none")
+plot_appearance_related <- plot_appearance_related + theme(legend.position = "none")
+
+# Load the patchwork library
+library(patchwork)
+
+# Combine plots into a 2-column layout with a blank spacer
+combined_plot <- (plot_positive_agency + plot_negative_agency + 
+                  plot_high_competence + plot_low_competence +
+                  plot_high_warmth + plot_low_warmth +
+                  plot_trad_female + plot_trad_male +
+                  plot_appearance_related + plot_spacer()) +
+  plot_layout(ncol = 2, heights = c(1, 1, 1, 1, 1))  # Define layout with 2 columns and row heights
+
+# View the combined plot
+combined_plot
+
+# Save the plot with proper dimensions
+ggsave("combined_plots_same_width.png", plot = combined_plot, width = 12, height = 18, dpi = 300)
+
+
+
+```
+
+# Gender bias for all categories combined
+```{r}
+model_all <- brm(
+  formula = gender_bias ~ year_centered,
+  data = data,
+  backend = "cmdstanr",
+  prior = prior,
+  family = gaussian(),
+  chains = chains,
+  iter = 3000,
+  warmup = 1000,
+  cores = cores
+)
+```
+
+```{r}
+print(summary(model_all), digits = 5)
+plot(model_all)
+pp_check(model_all)
+```
+
+```{r}
+# Step 1: Extract posterior draws for the regression line
+posterior_lines <- model_all %>%
+  spread_draws(b_Intercept, b_year_centered) %>%            # Extract posterior samples
+  mutate(year = list(seq(min(data$year_centered), 
+                         max(data$year_centered), length.out = 100))) %>%
+  unnest(year) %>%
+  mutate(.fitted = b_Intercept + b_year_centered * year)    # Compute fitted values for each 'year'
+
+# Step 2: Plot the observed data and posterior regression
+plot_all <- ggplot(data, aes(x = year_centered, y = gender_bias)) +
+  geom_point(aes(color = word), alpha = 0.7, size = 2) + # Observed data (one word/year)
+  stat_lineribbon(
+    data = posterior_lines,
+    aes(x = year, y = .fitted),                    # Posterior fitted line
+    .width = c(0.5, 0.8, 0.95),                    # Add credible intervals
+    fill = "lightblue", alpha = 0.5
+  ) +
+  ylim(-0.2, 0.2) +
+  labs(title = "All Categories combined",
+       x = "Year",
+       y = "Gender Bias",
+       color = "Word") +
+  theme_minimal()
+
+plot_all
+```
+
